@@ -1,3 +1,9 @@
+
+
+from tensorflow.python.keras.wrappers.scikit_learn import KerasRegressor
+
+
+from sklearn.model_selection import GridSearchCV
 import pandas as pd
 import numpy as np
 import nltk
@@ -20,6 +26,7 @@ from nltk.tokenize import word_tokenize
 
 from keras import backend as K
 from sklearn.metrics import mean_squared_log_error, mean_squared_error
+
 def msle(y_true, y_pred):
     return K.mean(K.square(K.log(y_true + 1) - K.log(y_pred + 1)), axis=-1)
 def rmse(y_true, y_pred):
@@ -120,16 +127,37 @@ model.compile(loss='mean_squared_error', optimizer='adam', metrics=['mape', msle
 # Define early stopping
 early_stopping = EarlyStopping(monitor='val_loss', patience=5)
 
-# Train the model
-history = model.fit(X_train_padded, y_train, batch_size=batch_size, epochs=epochs, validation_data=(X_test_padded, y_test), callbacks=[early_stopping])
+# Function to create model, required for KerasClassifier
+def create_model(optimizer=Adam, learning_rate=0.01, lstm_units=128, dropout_rate=0.0):
+    model = Sequential()
+    model.add(Embedding(len(tokenizer.word_index) + 1, embedding_dim, input_length=max_sequence_length))
+    model.add(LSTM(lstm_units, return_sequences=True, kernel_initializer=GlorotUniform(seed=42), recurrent_regularizer=l2(1e-5)))
+    model.add(LSTM(lstm_units, kernel_initializer=GlorotUniform(seed=42), recurrent_regularizer=l2(1e-5)))
+    model.add(Dense(64, activation='relu'))
+    model.add(Dropout(dropout_rate))
+    model.add(Dense(1, activation='linear'))
 
-# Evaluate the model
-loss = model.evaluate(X_test_padded, y_test)
-print('Model loss:', loss)
+    # Compile the model
+    model.compile(loss='mean_squared_error', optimizer=optimizer(learning_rate=learning_rate), metrics=['mape', msle, rmse])
+    
+    return model
 
-y_test = y_test.values.flatten()
-# Calculate MAPE
-y_pred = model.predict(X_test_padded).flatten() # Flatten the output
-mape = np.mean(np.abs(y_test - y_pred) / y_test) * 100
-print('MAPE:', mape)
+# Create a KerasRegressor instance
+model = KerasRegressor(build_fn=create_model)
 
+# Define parameter grid
+param_grid = {
+    'learning_rate': [0.001, 0.01, 0.1],
+    'optimizer': [Adam],
+    'lstm_units': [64, 128, 256],
+    'dropout_rate': [0.0, 0.2, 0.5],
+    'batch_size': [32, 64, 128],
+    'epochs': [10, 50, 100],
+}
+
+# Create Grid Search
+grid = GridSearchCV(estimator=model, param_grid=param_grid, cv=3)
+grid_result = grid.fit(X_train_padded, y_train)
+
+# Report Results
+print(f"Best: {grid_result.best_score_} using {grid_result.best_params_}")
